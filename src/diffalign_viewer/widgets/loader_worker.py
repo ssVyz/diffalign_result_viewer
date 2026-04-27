@@ -9,7 +9,9 @@ from ..models import ScreeningResults
 
 
 class LoaderWorker(QObject):
-    progress = Signal(int, int, str)  # current_bytes, total_bytes, message
+    # Use qint64 for byte counts — `int` here is a 4-byte signed C int and
+    # overflows for files > 2 GiB.
+    progress = Signal("qint64", "qint64", str)
     finished = Signal(object)  # ScreeningResults
     failed = Signal(str)
     cancelled = Signal()
@@ -42,7 +44,7 @@ class LoaderWorker(QObject):
 class LoaderController(QObject):
     """Manages a LoaderWorker on its own QThread."""
 
-    progress = Signal(int, int, str)
+    progress = Signal("qint64", "qint64", str)
     finished = Signal(object)  # ScreeningResults
     failed = Signal(str)
     cancelled = Signal()

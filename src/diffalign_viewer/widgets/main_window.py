@@ -223,9 +223,12 @@ class MainWindow(QMainWindow):
         self._status_label.setText("Cancelling…")
 
     def _on_load_progress(self, current: int, total: int, message: str) -> None:
+        # QProgressBar takes a 32-bit signed int; for >2 GiB files we scale
+        # to 0–10000 ticks so the bar still tracks accurately.
         if total > 0:
-            self._progress_bar.setRange(0, total)
-            self._progress_bar.setValue(min(current, total))
+            ticks = 10_000
+            self._progress_bar.setRange(0, ticks)
+            self._progress_bar.setValue(min(ticks, int(current * ticks / total)))
         else:
             self._progress_bar.setRange(0, 0)
         if message:
