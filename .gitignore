@@ -1,0 +1,22 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# reference programs
+current_reference_tool/
+old_reference_program/
+
+# claude
+.claude/
+nul
+
+# mds
+*.md
+!README.md
