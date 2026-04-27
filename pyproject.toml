@@ -1,7 +1,21 @@
 [project]
 name = "diffalign-result-viewer"
 version = "0.1.0"
-description = "Add your description here"
+description = "PySide6 viewer for diffalign analysis JSON results"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "ijson>=3.5.0",
+    "numpy>=2.4.4",
+    "pyside6>=6.11.0",
+]
+
+[project.scripts]
+diffalign-viewer = "diffalign_viewer.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/diffalign_viewer"]
