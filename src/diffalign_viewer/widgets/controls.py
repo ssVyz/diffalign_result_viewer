@@ -62,9 +62,10 @@ class ViewControls(QWidget):
         self._coverage.setSingleStep(0.5)
         self._coverage.setValue(95)
         self._coverage.setSuffix(" %")
-        self._coverage.editingFinished.connect(
-            lambda: self.coverageThresholdChanged.emit(self._coverage.value())
-        )
+        # keyboardTracking=False: don't fire on every keystroke while typing
+        # (recompute is expensive). Arrow buttons and Enter/focus-loss still fire.
+        self._coverage.setKeyboardTracking(False)
+        self._coverage.valueChanged.connect(self.coverageThresholdChanged.emit)
         v_form.addRow("Coverage threshold", self._coverage)
 
         outer.addWidget(view_box)

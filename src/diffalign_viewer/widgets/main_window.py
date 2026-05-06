@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from ..loader import recompute_variants_for_threshold
 from ..models import ScreeningResults
+from .best_positions import BestPositionsDialog
 from .controls import ParamsPanel, ViewControls
 from .detail import DetailPanel
 from .heatmap import HeatmapView, HeatmapWidget
@@ -90,6 +91,7 @@ class MainWindow(QMainWindow):
         menu_file.addAction(self._action_quit)
 
         menu_view = self.menuBar().addMenu("&View")
+        self._menu_view = menu_view
         # Dock toggle actions are appended later
 
         # Central widget — heatmap + legend
@@ -144,6 +146,18 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, left_dock)
         menu_view.addAction(left_dock.toggleViewAction())
 
+        # Best-positions dialog — slim, movable, default off.
+        self._best_positions = BestPositionsDialog(self)
+        self._action_best_positions = QAction("Best positions", self)
+        self._action_best_positions.setCheckable(True)
+        self._action_best_positions.setChecked(False)
+        self._action_best_positions.toggled.connect(self._toggle_best_positions)
+        self._best_positions.finished.connect(
+            lambda *_: self._action_best_positions.setChecked(False)
+        )
+        menu_view.addSeparator()
+        menu_view.addAction(self._action_best_positions)
+
         # Status bar
         sb = QStatusBar()
         self.setStatusBar(sb)
@@ -181,6 +195,8 @@ class MainWindow(QMainWindow):
 
         self._search.matchesUpdated.connect(self._heatmap.set_search_matches)
         self._search.matchActivated.connect(self._heatmap.jump_to_position)
+
+        self._best_positions.positionSelected.connect(self._on_best_position_selected)
 
     def _update_actions(self) -> None:
         has_results = self._results is not None
@@ -270,6 +286,7 @@ class MainWindow(QMainWindow):
         self._heatmap.set_results(results)
         self._search.set_template(results.template_sequence if results else "")
         self._detail.reset()
+        self._best_positions.set_results(results)
 
         if results is None:
             self._file_label.setText("")
@@ -310,6 +327,8 @@ class MainWindow(QMainWindow):
             recompute_variants_for_threshold(grid, threshold)
         # Refresh detail panel if visible
         self._heatmap.viewport().update()
+        if self._best_positions.isVisible():
+            self._best_positions.refresh()
 
     def _on_zoom_changed(self, factor: float) -> None:
         view = self._make_view()
@@ -333,6 +352,23 @@ class MainWindow(QMainWindow):
         view = self._make_view()
         self._heatmap.set_view(view)
         self._legend.set_state(view.color_green_at, view.color_red_at, view.differential_mode)
+        self._best_positions.set_view_state(view.differential_mode, view.diff_ignore_count)
+
+    def _toggle_best_positions(self, checked: bool) -> None:
+        if checked:
+            view = self._make_view()
+            self._best_positions.set_results(self._results)
+            self._best_positions.set_view_state(view.differential_mode, view.diff_ignore_count)
+            self._best_positions.show()
+            self._best_positions.raise_()
+        else:
+            self._best_positions.hide()
+
+    def _on_best_position_selected(self, detail, length: int) -> None:
+        if detail is None:
+            return
+        self._heatmap.jump_to_position(detail.position)
+        self._detail.show_detail(detail, length)
 
     # ────────────────────────────────────────────────────────
     # Recent files
