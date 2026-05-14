@@ -206,9 +206,8 @@ def colorize_grid_differential_rgba(
     no_match_count: np.ndarray,
     total_sequences: np.ndarray,
     skipped: np.ndarray,
-    min_mismatches: np.ndarray,  # int32 with sentinels
-    excl_total: np.ndarray,
-    excl_no_match: np.ndarray,
+    excl_mm_levels: np.ndarray,  # int32 (N, B) — sorted asc per position
+    excl_mm_cumcount: np.ndarray,  # int64 (N, B) — cumulative off-target counts
     diff_green_at: int,
     diff_red_at: int,
     var_green_at: int,
@@ -218,7 +217,7 @@ def colorize_grid_differential_rgba(
     diff_ignore_count: int,
 ) -> np.ndarray:
     """Vectorized version of `differential_position_color` over a row."""
-    from .models import NO_MATCH_SENTINEL, NO_MIN_MM_SENTINEL, SKIPPED_SENTINEL
+    from .models import effective_min_mismatches
 
     n = variants_needed.shape[0]
     out = np.empty((n, 4), dtype=np.uint8)
@@ -251,11 +250,14 @@ def colorize_grid_differential_rgba(
 
     darkening = np.maximum(var_dark, nm_dark)
 
-    # Compute t from min_mismatches.
-    # ignore the min_mismatches when (excl_total - excl_no_match) <= diff_ignore_count
-    aligned_excl = excl_total[active] - excl_no_match[active]
-    mm = min_mismatches[active].astype(np.int64)
-    use_min = (aligned_excl > diff_ignore_count) & (mm != NO_MIN_MM_SENTINEL) & (mm != SKIPPED_SENTINEL) & (mm != NO_MATCH_SENTINEL)
+    # Compute t from the off-target min-mismatches, after discarding the
+    # `diff_ignore_count` lowest-mismatch off-target sequences. Positions with
+    # no surviving off-target signal stay green (t = 0).
+    eff_mm, has_signal = effective_min_mismatches(
+        excl_mm_levels[active], excl_mm_cumcount[active], diff_ignore_count
+    )
+    mm = eff_mm.astype(np.int64)
+    use_min = has_signal
 
     t = np.zeros(v.shape[0], dtype=np.float32)
     if diff_green_at <= diff_red_at:

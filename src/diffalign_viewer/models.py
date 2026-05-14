@@ -187,6 +187,14 @@ class LengthGrid:
         "min_mismatches",  # int32 array, sentinels: NO_MATCH_SENTINEL→u32::MAX, NO_MIN_MM_SENTINEL→null, SKIPPED_SENTINEL→skipped
         "excl_total",  # int32 array — exclusivity total_sequences (-1 if no exclusivity)
         "excl_no_match",  # int32 array — exclusivity no_match_count
+        # Per-position off-target mismatch histogram, flattened to a rectangular
+        # (n, max_buckets) pair: `excl_mm_levels` holds the aligned mismatch
+        # levels sorted ascending, `excl_mm_cumcount` the cumulative off-target
+        # count up to and including each level. Padding columns are 0. Used to
+        # resolve an "ignore the N lowest-mismatch off-targets" effective
+        # minimum — see `effective_min_mismatches`.
+        "excl_mm_levels",  # int32 array (n, max_buckets)
+        "excl_mm_cumcount",  # int64 array (n, max_buckets)
         "details",  # list[PositionDetail] aligned with the arrays
     )
 
@@ -200,7 +208,33 @@ class LengthGrid:
         self.min_mismatches = np.full(n, NO_MIN_MM_SENTINEL, dtype=np.int32)
         self.excl_total = np.full(n, -1, dtype=np.int32)
         self.excl_no_match = np.zeros(n, dtype=np.int32)
+        self.excl_mm_levels = np.zeros((n, 0), dtype=np.int32)
+        self.excl_mm_cumcount = np.zeros((n, 0), dtype=np.int64)
         self.details: list[PositionDetail] = []
+
+
+def effective_min_mismatches(
+    mm_levels: np.ndarray,  # int32 (N, B) — sorted asc per position, 0-padded
+    mm_cumcount: np.ndarray,  # int64 (N, B) — cumulative off-target counts, 0-padded
+    ignore_count: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Resolve each position's off-target ``min_mismatches`` after discarding
+    the ``ignore_count`` lowest-mismatch off-target sequences.
+
+    Returns ``(eff_mm, has_signal)``: ``eff_mm[i]`` is the smallest mismatch
+    level whose cumulative off-target count exceeds ``ignore_count``, and
+    ``has_signal[i]`` is False when no level qualifies — i.e. nothing aligned,
+    or every aligned off-target falls within the ignore threshold. The value of
+    ``eff_mm`` where ``has_signal`` is False is unspecified and must not be used.
+    """
+    n = mm_levels.shape[0]
+    if mm_levels.shape[1] == 0:
+        return np.zeros(n, dtype=np.int32), np.zeros(n, dtype=bool)
+    mask = mm_cumcount > ignore_count
+    has_signal = mask.any(axis=1)
+    first_idx = np.argmax(mask, axis=1)
+    eff_mm = mm_levels[np.arange(n), first_idx]
+    return eff_mm, has_signal
 
 
 @dataclass

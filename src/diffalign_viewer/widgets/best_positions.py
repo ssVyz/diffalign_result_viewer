@@ -25,18 +25,18 @@ from PySide6.QtWidgets import (
 )
 
 from ..models import (
-    NO_MATCH_SENTINEL,
     NO_MIN_MM_SENTINEL,
     SKIPPED_SENTINEL,
     LengthGrid,
     PositionDetail,
     ScreeningResults,
+    effective_min_mismatches,
 )
 
 
 # Used as the "off-target mismatches" score when there is effectively
-# infinite discrimination: all-no-match, no template alignment in the
-# off-target set, or fewer aligned off-targets than the ignore threshold.
+# infinite discrimination: nothing in the off-target set aligns, or every
+# aligned off-target falls within the ignore-count threshold.
 _INF_MM = 10**9
 
 
@@ -172,22 +172,17 @@ class BestPositionsDialog(QDialog):
             v = grid.variants_needed[cols]
 
             if self._differential:
-                mm = grid.min_mismatches[cols]
-                excl_total = grid.excl_total[cols]
-                excl_no_match = grid.excl_no_match[cols]
-                aligned_excl = excl_total - excl_no_match
-
-                # Match the heatmap's interpretation of "best discrimination":
-                # ignore if too few aligned off-target seqs, treat null/no-match
-                # as infinitely discriminating.
-                mm_score = mm.astype(np.int64).copy()
-                inf_mask = (
-                    (aligned_excl <= self._diff_ignore_count)
-                    | (mm_score == NO_MIN_MM_SENTINEL)
-                    | (mm_score == SKIPPED_SENTINEL)
-                    | (mm_score == NO_MATCH_SENTINEL)
+                # Match the heatmap: resolve off-target mismatches after
+                # discarding the `diff_ignore_count` lowest-mismatch
+                # off-targets. Positions with no surviving off-target signal
+                # count as infinitely discriminating.
+                eff_mm, has_signal = effective_min_mismatches(
+                    grid.excl_mm_levels[cols],
+                    grid.excl_mm_cumcount[cols],
+                    self._diff_ignore_count,
                 )
-                mm_score[inf_mask] = _INF_MM
+                mm_score = eff_mm.astype(np.int64).copy()
+                mm_score[~has_signal] = _INF_MM
             else:
                 mm_score = np.zeros(cols.shape[0], dtype=np.int64)
 
@@ -208,7 +203,13 @@ class BestPositionsDialog(QDialog):
                         oligo_length=grid.oligo_length,
                         variants=int(v[k]),
                         mm_score=int(mm_score[k]),
-                        mm_display=self._format_mm(grid, col_int) if self._differential else "",
+                        mm_display=(
+                            self._format_mm(
+                                grid, col_int, int(eff_mm[k]), bool(has_signal[k])
+                            )
+                            if self._differential
+                            else ""
+                        ),
                         top_pct=float(top_pct),
                     )
                 )
@@ -236,16 +237,17 @@ class BestPositionsDialog(QDialog):
         return candidates[:n]
 
     @staticmethod
-    def _format_mm(grid: LengthGrid, col: int) -> str:
-        mm = int(grid.min_mismatches[col])
-        aligned = int(grid.excl_total[col]) - int(grid.excl_no_match[col])
-        if mm == NO_MIN_MM_SENTINEL:
+    def _format_mm(grid: LengthGrid, col: int, eff_mm: int, has_signal: bool) -> str:
+        if has_signal:
+            return f"{eff_mm} mm"
+        raw = int(grid.min_mismatches[col])
+        if raw == NO_MIN_MM_SENTINEL:
             return "all no-match"
-        if mm == NO_MATCH_SENTINEL:
-            return "no align"
-        if mm == SKIPPED_SENTINEL or aligned <= 0:
+        if raw == SKIPPED_SENTINEL:
             return "—"
-        return f"{mm} mm"
+        # A real off-target minimum existed, but every aligned off-target
+        # fell within the ignore-count threshold.
+        return "ignored"
 
     # ────────────────────────────────────────────────────────
     # List + cycling

@@ -300,6 +300,11 @@ def _build_length_grid(oligo_length: int, length_result: dict[str, Any]) -> Leng
     grid = LengthGrid(oligo_length=oligo_length, n=n)
     details: list[PositionDetail] = grid.details
 
+    # Per-position sorted off-target mismatch histogram, collected here and
+    # padded into rectangular arrays once the max bucket count is known.
+    per_pos_levels: list[list[int]] = [[] for _ in range(n)]
+    per_pos_cum: list[list[int]] = [[] for _ in range(n)]
+
     for i, pr in enumerate(positions):
         analysis = pr.get("analysis") or {}
         skipped = bool(analysis.get("skipped", False))
@@ -357,6 +362,24 @@ def _build_length_grid(oligo_length: int, length_result: dict[str, Any]) -> Leng
 
             grid.excl_total[i] = excl_total
             grid.excl_no_match[i] = excl_no_match
+
+            # Sorted aligned-only buckets → cumulative off-target counts, so
+            # the heatmap can ignore the N lowest-mismatch off-targets.
+            aligned_buckets = sorted(
+                (
+                    (b.mismatches, b.count)
+                    for b in histogram
+                    if b.mismatches < NO_MATCH_SENTINEL
+                ),
+                key=lambda mb: mb[0],
+            )
+            if aligned_buckets:
+                running = 0
+                for level, count in aligned_buckets:
+                    running += count
+                    per_pos_levels[i].append(level)
+                    per_pos_cum[i].append(running)
+
             if skipped:
                 grid.min_mismatches[i] = SKIPPED_SENTINEL
             elif min_mm is None:
@@ -385,6 +408,17 @@ def _build_length_grid(oligo_length: int, length_result: dict[str, Any]) -> Leng
                 exclusivity=excl,
             )
         )
+
+    max_buckets = max((len(lvls) for lvls in per_pos_levels), default=0)
+    if max_buckets > 0:
+        levels_arr = np.zeros((n, max_buckets), dtype=np.int32)
+        cum_arr = np.zeros((n, max_buckets), dtype=np.int64)
+        for i, (lvls, cum) in enumerate(zip(per_pos_levels, per_pos_cum)):
+            if lvls:
+                levels_arr[i, : len(lvls)] = lvls
+                cum_arr[i, : len(cum)] = cum
+        grid.excl_mm_levels = levels_arr
+        grid.excl_mm_cumcount = cum_arr
 
     return grid
 
