@@ -104,6 +104,7 @@ class HeatmapWidget(QAbstractScrollArea):
         self._annotations: list[Annotation] = []
         self._ann_layout: list[_AnnLayout] = []
         self._ann_area_height = 0
+        self._horizontal_wheel = False
         self.view = HeatmapView()
 
         # Cache the position→column lookup for the (uniform) first grid.
@@ -157,6 +158,9 @@ class HeatmapWidget(QAbstractScrollArea):
         self._rebuild_annotation_layout()
         self._update_scroll_ranges()
         self.viewport().update()
+
+    def set_horizontal_wheel(self, enabled: bool) -> None:
+        self._horizontal_wheel = bool(enabled)
 
     def jump_to_position(self, position: int) -> None:
         if self._first_positions is None or self._n_positions == 0:
@@ -632,8 +636,9 @@ class HeatmapWidget(QAbstractScrollArea):
         self.cellClicked.emit(grid.details[col], grid.oligo_length)
 
     def wheelEvent(self, event: QWheelEvent):  # type: ignore[override]
-        # Hold Ctrl: zoom. Hold Shift or no modifier with horizontal delta:
-        # horizontal scroll. Plain wheel: vertical scroll (default).
+        # Ctrl: zoom. Otherwise: scroll on the axis chosen by the
+        # horizontal-wheel toggle (a horizontal trackpad delta always wins
+        # regardless). Shift multiplies the step.
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             delta = event.angleDelta().y()
             if delta == 0:
@@ -648,11 +653,27 @@ class HeatmapWidget(QAbstractScrollArea):
 
         delta_y = event.angleDelta().y()
         delta_x = event.angleDelta().x()
-        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier or abs(delta_x) > abs(delta_y):
+        shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+        multiplier = 5 if shift else 1
+
+        if abs(delta_x) > abs(delta_y):
             bar = self.horizontalScrollBar()
-            bar.setValue(bar.value() - (delta_x or delta_y))
+            bar.setValue(bar.value() - delta_x * multiplier)
             event.accept()
             return
+
+        if self._horizontal_wheel:
+            bar = self.horizontalScrollBar()
+            bar.setValue(bar.value() - delta_y * multiplier)
+            event.accept()
+            return
+
+        if shift:
+            bar = self.verticalScrollBar()
+            bar.setValue(bar.value() - delta_y * multiplier)
+            event.accept()
+            return
+
         super().wheelEvent(event)
 
     @staticmethod

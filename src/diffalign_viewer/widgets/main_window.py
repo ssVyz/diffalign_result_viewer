@@ -8,8 +8,10 @@ from pathlib import Path
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDockWidget,
     QFileDialog,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -101,10 +103,27 @@ class MainWindow(QMainWindow):
         c_layout.setSpacing(0)
 
         self._legend = LegendWidget()
-        c_layout.addWidget(self._legend)
+        self._horizontal_wheel_check = QCheckBox("Horizontal wheel")
+        self._horizontal_wheel_check.setToolTip(
+            "Mousewheel scrolls left/right instead of up/down.\n"
+            "Hold Shift to scroll faster (on either axis)."
+        )
+        top_bar = QWidget()
+        top_layout = QHBoxLayout(top_bar)
+        top_layout.setContentsMargins(0, 0, 8, 0)
+        top_layout.setSpacing(8)
+        top_layout.addWidget(self._legend, 1)
+        top_layout.addWidget(self._horizontal_wheel_check, 0)
+        c_layout.addWidget(top_bar)
 
         self._heatmap = HeatmapWidget()
         c_layout.addWidget(self._heatmap, 1)
+
+        horizontal_wheel = bool(
+            self._settings.value("heatmap/horizontal_wheel", False, type=bool)
+        )
+        self._horizontal_wheel_check.setChecked(horizontal_wheel)
+        self._heatmap.set_horizontal_wheel(horizontal_wheel)
 
         self.setCentralWidget(central)
 
@@ -197,6 +216,8 @@ class MainWindow(QMainWindow):
         self._search.matchActivated.connect(self._heatmap.jump_to_position)
 
         self._best_positions.positionSelected.connect(self._on_best_position_selected)
+
+        self._horizontal_wheel_check.toggled.connect(self._on_horizontal_wheel_toggled)
 
     def _update_actions(self) -> None:
         has_results = self._results is not None
@@ -329,6 +350,10 @@ class MainWindow(QMainWindow):
         self._heatmap.viewport().update()
         if self._best_positions.isVisible():
             self._best_positions.refresh()
+
+    def _on_horizontal_wheel_toggled(self, checked: bool) -> None:
+        self._heatmap.set_horizontal_wheel(checked)
+        self._settings.setValue("heatmap/horizontal_wheel", checked)
 
     def _on_zoom_changed(self, factor: float) -> None:
         view = self._make_view()

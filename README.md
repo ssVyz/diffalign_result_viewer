@@ -53,8 +53,11 @@ loaded successfully without OOM.
 * **Zoom**: slider in the controls dock, or `Ctrl + mouse wheel`. Cell
   width scales from 30% to 400%; the position ruler stride adapts so
   labels stay readable at any zoom.
-* **Scrolling**: vertical wheel scrolls vertically as usual; horizontal
-  wheel or `Shift + wheel` scrolls horizontally.
+* **Scrolling**: vertical wheel scrolls vertically as usual; a true
+  horizontal wheel/trackpad delta scrolls horizontally. A
+  **Horizontal wheel** checkbox above the heatmap flips the mousewheel
+  so it scrolls left/right instead of up/down. `Shift + wheel`
+  multiplies the step size (works on whichever axis is active).
 * **Search jump-to**: double-clicking a search result scrolls the
   heatmap to that template position.
 
