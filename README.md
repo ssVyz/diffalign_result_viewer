@@ -110,6 +110,31 @@ whatever wrote the file.
   results panel lists them with template coordinates and direction.
 * Double-click a result to jump the heatmap to that position.
 
+### Overview window
+
+Toggled from **View → Overview**, a floating window compresses the whole
+template into the available pixel width so very large runs can be taken in
+at a glance.
+
+* One row per oligo length, matching the heatmap.
+* Each pixel column stands for a *bucket* of template positions. Rather
+  than averaging the bucket — which would dilute good spots into the
+  surrounding mediocrity — the column is coloured by the single
+  **best-fitting** position in it (fewest variants, then least no-match;
+  in differential mode, highest off-target min-mismatch then fewest
+  variants). A lone good oligo position therefore still lights up green.
+* Colouring follows the same gradient and live controls as the heatmap
+  (colour thresholds, no-match thresholds, differential mode, coverage
+  threshold) and re-renders when any of them change.
+* A translucent rectangle marks the slice currently shown in the main
+  heatmap. Drag it (or click anywhere) to scroll the heatmap to that
+  position; scrolling, zooming or resizing the heatmap moves the
+  rectangle back in sync.
+* Rendering is viewport-driven and cached: the per-column best is resolved
+  with a numpy segment-argmin over the position arrays and only recomputed
+  on a view/size/results change, so it stays cheap even for multi-million
+  position templates.
+
 ### Details dock
 
 For the clicked cell, the right-hand dock shows:

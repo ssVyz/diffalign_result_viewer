@@ -92,6 +92,7 @@ class HeatmapWidget(QAbstractScrollArea):
 
     cellClicked = Signal(object, int)  # (PositionDetail, oligo_length)
     cellHovered = Signal(object, int)  # (PositionDetail or None, length)
+    viewportChanged = Signal(int, int)  # (col_start, col_end) of visible columns
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -122,6 +123,7 @@ class HeatmapWidget(QAbstractScrollArea):
 
         self.horizontalScrollBar().valueChanged.connect(self.viewport().update)
         self.verticalScrollBar().valueChanged.connect(self.viewport().update)
+        self.horizontalScrollBar().valueChanged.connect(self._emit_viewport)
 
     # ────────────────────────────────────────────────────────
     # Public API
@@ -142,11 +144,13 @@ class HeatmapWidget(QAbstractScrollArea):
         self._ann_area_height = 0
         self._rebuild_annotation_layout()
         self._update_scroll_ranges()
+        self._emit_viewport()
         self.viewport().update()
 
     def set_view(self, view: HeatmapView) -> None:
         self.view = view
         self._update_scroll_ranges()
+        self._emit_viewport()
         self.viewport().update()
 
     def set_search_matches(self, matches: list[SearchMatch]) -> None:
@@ -172,6 +176,32 @@ class HeatmapWidget(QAbstractScrollArea):
         viewport_w = self.viewport().width()
         target = max(0, x - viewport_w // 3)
         self.horizontalScrollBar().setValue(target)
+
+    def scroll_to_column(self, col: int) -> None:
+        """Scroll so that template column ``col`` sits at the left edge."""
+        if self._n_positions == 0:
+            return
+        col = max(0, min(self._n_positions - 1, col))
+        cell_w = self._cell_width()
+        self.horizontalScrollBar().setValue(ROW_LABEL_WIDTH + col * cell_w)
+
+    def visible_column_range(self) -> tuple[int, int]:
+        """First and last column indices currently visible in the viewport."""
+        if self._n_positions == 0:
+            return (0, 0)
+        cell_w = self._cell_width()
+        scroll_x = self.horizontalScrollBar().value()
+        viewport_w = self.viewport().width()
+        col_start = max(0, (scroll_x - ROW_LABEL_WIDTH) // cell_w)
+        col_end = min(
+            self._n_positions - 1,
+            (scroll_x + viewport_w - ROW_LABEL_WIDTH) // cell_w,
+        )
+        return (int(col_start), int(max(col_start, col_end)))
+
+    def _emit_viewport(self) -> None:
+        col_start, col_end = self.visible_column_range()
+        self.viewportChanged.emit(col_start, col_end)
 
     # ────────────────────────────────────────────────────────
     # Geometry
@@ -207,6 +237,7 @@ class HeatmapWidget(QAbstractScrollArea):
     def resizeEvent(self, event):  # type: ignore[override]
         super().resizeEvent(event)
         self._update_scroll_ranges()
+        self._emit_viewport()
 
     def minimumSizeHint(self) -> QSize:  # type: ignore[override]
         return QSize(400, 200)
@@ -647,6 +678,7 @@ class HeatmapWidget(QAbstractScrollArea):
             new_zoom = max(0.3, min(4.0, self.view.zoom_level * factor))
             self.view.zoom_level = new_zoom
             self._update_scroll_ranges()
+            self._emit_viewport()
             self.viewport().update()
             event.accept()
             return

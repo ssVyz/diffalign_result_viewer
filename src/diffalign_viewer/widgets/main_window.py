@@ -32,6 +32,7 @@ from .detail import DetailPanel
 from .heatmap import HeatmapView, HeatmapWidget
 from .legend import LegendWidget
 from .loader_worker import LoaderController
+from .overview import OverviewWindow
 from .search import SearchPanel
 
 
@@ -177,6 +178,17 @@ class MainWindow(QMainWindow):
         menu_view.addSeparator()
         menu_view.addAction(self._action_best_positions)
 
+        # Overview window — whole-template bird's-eye, default off.
+        self._overview = OverviewWindow(self)
+        self._action_overview = QAction("Overview", self)
+        self._action_overview.setCheckable(True)
+        self._action_overview.setChecked(False)
+        self._action_overview.toggled.connect(self._toggle_overview)
+        self._overview.finished.connect(
+            lambda *_: self._action_overview.setChecked(False)
+        )
+        menu_view.addAction(self._action_overview)
+
         # Status bar
         sb = QStatusBar()
         self.setStatusBar(sb)
@@ -216,6 +228,10 @@ class MainWindow(QMainWindow):
         self._search.matchActivated.connect(self._heatmap.jump_to_position)
 
         self._best_positions.positionSelected.connect(self._on_best_position_selected)
+
+        # Overview ↔ heatmap two-way navigation.
+        self._overview.viewportDragged.connect(self._heatmap.scroll_to_column)
+        self._heatmap.viewportChanged.connect(self._overview.set_visible_range)
 
         self._horizontal_wheel_check.toggled.connect(self._on_horizontal_wheel_toggled)
 
@@ -308,6 +324,7 @@ class MainWindow(QMainWindow):
         self._search.set_template(results.template_sequence if results else "")
         self._detail.reset()
         self._best_positions.set_results(results)
+        self._overview.set_results(results)
 
         if results is None:
             self._file_label.setText("")
@@ -350,6 +367,8 @@ class MainWindow(QMainWindow):
         self._heatmap.viewport().update()
         if self._best_positions.isVisible():
             self._best_positions.refresh()
+        if self._overview.isVisible():
+            self._overview.refresh()
 
     def _on_horizontal_wheel_toggled(self, checked: bool) -> None:
         self._heatmap.set_horizontal_wheel(checked)
@@ -378,6 +397,7 @@ class MainWindow(QMainWindow):
         self._heatmap.set_view(view)
         self._legend.set_state(view.color_green_at, view.color_red_at, view.differential_mode)
         self._best_positions.set_view_state(view.differential_mode, view.diff_ignore_count)
+        self._overview.set_view(view)
 
     def _toggle_best_positions(self, checked: bool) -> None:
         if checked:
@@ -388,6 +408,18 @@ class MainWindow(QMainWindow):
             self._best_positions.raise_()
         else:
             self._best_positions.hide()
+
+    def _toggle_overview(self, checked: bool) -> None:
+        if checked:
+            self._overview.set_results(self._results)
+            self._overview.set_view(self._make_view())
+            self._overview.show()
+            self._overview.raise_()
+            # Sync the slice rectangle to the heatmap's current viewport.
+            start, end = self._heatmap.visible_column_range()
+            self._overview.set_visible_range(start, end)
+        else:
+            self._overview.hide()
 
     def _on_best_position_selected(self, detail, length: int) -> None:
         if detail is None:
