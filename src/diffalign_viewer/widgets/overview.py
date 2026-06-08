@@ -40,6 +40,104 @@ OV_ROW_GAP = 1
 _INF = np.inf
 
 
+# ── shared bird's-eye rendering ──────────────────────────────
+# These module-level helpers build the compressed (n_rows × n_cols) colour
+# buffer that the overview paints. They are shared with the image exporter so
+# the exported picture is coloured identically to the on-screen overview.
+
+
+def _rank_array(grid, view: HeatmapView) -> np.ndarray:
+    """Lower is better. ``+inf`` for positions that can't host an oligo
+    (skipped, or no variant data)."""
+    active = (~grid.skipped) & (grid.variants_needed > 0)
+    variants = grid.variants_needed.astype(np.float64)
+    if view.differential_mode:
+        eff_mm, has_signal = effective_min_mismatches(
+            grid.excl_mm_levels,
+            grid.excl_mm_cumcount,
+            view.diff_ignore_count,
+        )
+        mm = eff_mm.astype(np.float64)
+        # No surviving off-target signal == maximally discriminating.
+        mm[~has_signal] = 1e9
+        # Higher mm is better, then fewer variants. Encode both so smaller
+        # ranks are the better positions.
+        rank = -mm * 1e6 + variants
+    else:
+        nm = np.where(
+            grid.total_sequences > 0,
+            grid.no_match_count / np.maximum(grid.total_sequences, 1),
+            0.0,
+        )
+        # Fewer variants first, less no-match as a tie-breaker.
+        rank = variants + nm * 1e-3
+    rank = np.where(active, rank, _INF)
+    return rank
+
+
+def _segment_best(rank: np.ndarray, edges: np.ndarray, n_cols: int) -> np.ndarray:
+    """Global index of the lowest-rank position in each bucket."""
+    best = np.empty(n_cols, dtype=np.int64)
+    last = rank.shape[0] - 1
+    for c in range(n_cols):
+        lo = int(edges[c])
+        hi = int(edges[c + 1])
+        if hi <= lo:
+            # Defensive: an empty bucket reuses the previous position so we
+            # never call argmin on an empty slice.
+            best[c] = min(lo, last)
+            continue
+        seg = rank[lo:hi]
+        best[c] = lo + int(np.argmin(seg))
+    return best
+
+
+def _colorize_subset(grid, idx: np.ndarray, view: HeatmapView) -> np.ndarray:
+    vn = grid.variants_needed[idx]
+    nm = grid.no_match_count[idx]
+    ts = grid.total_sequences[idx]
+    sk = grid.skipped[idx]
+    if view.differential_mode:
+        return colorize_grid_differential_rgba(
+            vn, nm, ts, sk,
+            grid.excl_mm_levels[idx],
+            grid.excl_mm_cumcount[idx],
+            view.diff_green_at,
+            view.diff_red_at,
+            view.color_green_at,
+            view.color_red_at,
+            view.nomatch_ok_pct,
+            view.nomatch_bad_pct,
+            view.diff_ignore_count,
+        )
+    return colorize_grid_rgba(
+        vn, nm, ts, sk,
+        view.color_green_at,
+        view.color_red_at,
+        view.nomatch_ok_pct,
+        view.nomatch_bad_pct,
+    )
+
+
+def build_overview_buffer(grids, view: HeatmapView, n_cols: int) -> np.ndarray:
+    """Compress every grid's position axis into ``n_cols`` buckets, colouring
+    each bucket with its single best-fitting position. Returns an
+    ``(len(grids), n_cols, 4)`` uint8 RGBA buffer."""
+    buf = np.empty((len(grids), n_cols, 4), dtype=np.uint8)
+    for ri, grid in enumerate(grids):
+        grid_n = int(grid.variants_needed.shape[0])
+        if grid_n == 0:
+            buf[ri, :] = (NO_DATA[0], NO_DATA[1], NO_DATA[2], 255)
+            continue
+        # Each grid may have a different number of positions (longer oligos
+        # have fewer valid start sites), so bucket each over its own length.
+        edges = np.linspace(0, grid_n, n_cols + 1).astype(np.int64)
+        rank = _rank_array(grid, view)
+        best = _segment_best(rank, edges, n_cols)
+        buf[ri] = _colorize_subset(grid, best, view)
+    return buf
+
+
 class OverviewPanel(QWidget):
     """The painted bird's-eye widget. Lives inside :class:`OverviewWindow`."""
 
@@ -148,77 +246,6 @@ class OverviewPanel(QWidget):
         self._buf = None
         self._cache_cols = -1
 
-    def _rank_array(self, grid) -> np.ndarray:
-        """Lower is better. ``+inf`` for positions that can't host an oligo
-        (skipped, or no variant data)."""
-        active = (~grid.skipped) & (grid.variants_needed > 0)
-        variants = grid.variants_needed.astype(np.float64)
-        if self._view.differential_mode:
-            eff_mm, has_signal = effective_min_mismatches(
-                grid.excl_mm_levels,
-                grid.excl_mm_cumcount,
-                self._view.diff_ignore_count,
-            )
-            mm = eff_mm.astype(np.float64)
-            # No surviving off-target signal == maximally discriminating.
-            mm[~has_signal] = 1e9
-            # Higher mm is better, then fewer variants. Encode both so smaller
-            # ranks are the better positions.
-            rank = -mm * 1e6 + variants
-        else:
-            nm = np.where(
-                grid.total_sequences > 0,
-                grid.no_match_count / np.maximum(grid.total_sequences, 1),
-                0.0,
-            )
-            # Fewer variants first, less no-match as a tie-breaker.
-            rank = variants + nm * 1e-3
-        rank = np.where(active, rank, _INF)
-        return rank
-
-    @staticmethod
-    def _segment_best(rank: np.ndarray, edges: np.ndarray, n_cols: int) -> np.ndarray:
-        """Global index of the lowest-rank position in each bucket."""
-        best = np.empty(n_cols, dtype=np.int64)
-        last = rank.shape[0] - 1
-        for c in range(n_cols):
-            lo = int(edges[c])
-            hi = int(edges[c + 1])
-            if hi <= lo:
-                # Defensive: an empty bucket reuses the previous position so we
-                # never call argmin on an empty slice.
-                best[c] = min(lo, last)
-                continue
-            seg = rank[lo:hi]
-            best[c] = lo + int(np.argmin(seg))
-        return best
-
-    def _colorize_subset(self, grid, idx: np.ndarray) -> np.ndarray:
-        vn = grid.variants_needed[idx]
-        nm = grid.no_match_count[idx]
-        ts = grid.total_sequences[idx]
-        sk = grid.skipped[idx]
-        if self._view.differential_mode:
-            return colorize_grid_differential_rgba(
-                vn, nm, ts, sk,
-                grid.excl_mm_levels[idx],
-                grid.excl_mm_cumcount[idx],
-                self._view.diff_green_at,
-                self._view.diff_red_at,
-                self._view.color_green_at,
-                self._view.color_red_at,
-                self._view.nomatch_ok_pct,
-                self._view.nomatch_bad_pct,
-                self._view.diff_ignore_count,
-            )
-        return colorize_grid_rgba(
-            vn, nm, ts, sk,
-            self._view.color_green_at,
-            self._view.color_red_at,
-            self._view.nomatch_ok_pct,
-            self._view.nomatch_bad_pct,
-        )
-
     def _ensure_buffer(self, n_cols: int) -> None:
         if self._buf is not None and self._cache_cols == n_cols:
             return
@@ -226,20 +253,7 @@ class OverviewPanel(QWidget):
             self._buf = None
             self._cache_cols = n_cols
             return
-        grids = self._results.grids
-        buf = np.empty((len(grids), n_cols, 4), dtype=np.uint8)
-        for ri, grid in enumerate(grids):
-            grid_n = int(grid.variants_needed.shape[0])
-            if grid_n == 0:
-                buf[ri, :] = (NO_DATA[0], NO_DATA[1], NO_DATA[2], 255)
-                continue
-            # Each grid may have a different number of positions (longer oligos
-            # have fewer valid start sites), so bucket each over its own length.
-            edges = np.linspace(0, grid_n, n_cols + 1).astype(np.int64)
-            rank = self._rank_array(grid)
-            best = self._segment_best(rank, edges, n_cols)
-            buf[ri] = self._colorize_subset(grid, best)
-        self._buf = buf
+        self._buf = build_overview_buffer(self._results.grids, self._view, n_cols)
         self._cache_cols = n_cols
 
     # ── painting ────────────────────────────────────────────

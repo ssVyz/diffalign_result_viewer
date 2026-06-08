@@ -29,6 +29,7 @@ from ..models import ScreeningResults
 from .best_positions import BestPositionsDialog
 from .controls import ParamsPanel, ViewControls
 from .detail import DetailPanel
+from .export_image import ExportImageDialog
 from .heatmap import HeatmapView, HeatmapWidget
 from .legend import LegendWidget
 from .loader_worker import LoaderController
@@ -72,6 +73,8 @@ class MainWindow(QMainWindow):
 
         self._action_open = QAction("Open…", self)
         self._action_open.setShortcut(QKeySequence.StandardKey.Open)
+        self._action_export_image = QAction("Export as image…", self)
+        self._action_export_image.setShortcut(QKeySequence("Ctrl+E"))
         self._action_close = QAction("Close file", self)
         self._action_close.setShortcut(QKeySequence("Ctrl+W"))
         self._action_quit = QAction("Quit", self)
@@ -89,6 +92,9 @@ class MainWindow(QMainWindow):
         menu_file = self.menuBar().addMenu("&File")
         menu_file.addAction(self._action_open)
         self._recent_menu = menu_file.addMenu("Open &recent")
+        menu_file.addSeparator()
+        menu_file.addAction(self._action_export_image)
+        menu_file.addSeparator()
         menu_file.addAction(self._action_close)
         menu_file.addSeparator()
         menu_file.addAction(self._action_quit)
@@ -206,6 +212,7 @@ class MainWindow(QMainWindow):
 
     def _connect_signals(self) -> None:
         self._action_open.triggered.connect(self._open_file_dialog)
+        self._action_export_image.triggered.connect(self._export_image_dialog)
         self._action_close.triggered.connect(self._close_file)
         self._action_quit.triggered.connect(self.close)
         self._cancel_button.clicked.connect(self._cancel_load)
@@ -238,6 +245,7 @@ class MainWindow(QMainWindow):
     def _update_actions(self) -> None:
         has_results = self._results is not None
         self._action_close.setEnabled(has_results)
+        self._action_export_image.setEnabled(has_results)
 
     # ────────────────────────────────────────────────────────
     # File loading
@@ -254,6 +262,18 @@ class MainWindow(QMainWindow):
         if not path:
             return
         self.load_file(path)
+
+    def _export_image_dialog(self) -> None:
+        if self._results is None:
+            return
+        dialog = ExportImageDialog(
+            self._results,
+            self._make_view(),
+            self._current_path,
+            self,
+            coverage_threshold=self._controls.coverage_threshold(),
+        )
+        dialog.exec()
 
     def load_file(self, path: str) -> None:
         if not os.path.exists(path):
