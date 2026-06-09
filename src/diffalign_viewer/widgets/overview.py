@@ -119,19 +119,40 @@ def _colorize_subset(grid, idx: np.ndarray, view: HeatmapView) -> np.ndarray:
     )
 
 
-def build_overview_buffer(grids, view: HeatmapView, n_cols: int) -> np.ndarray:
+def build_overview_buffer(
+    grids,
+    view: HeatmapView,
+    n_cols: int,
+    col_bounds: list[tuple[int, int]] | None = None,
+) -> np.ndarray:
     """Compress every grid's position axis into ``n_cols`` buckets, colouring
     each bucket with its single best-fitting position. Returns an
-    ``(len(grids), n_cols, 4)`` uint8 RGBA buffer."""
+    ``(len(grids), n_cols, 4)`` uint8 RGBA buffer.
+
+    ``col_bounds``, when given, holds a half-open ``(lo, hi)`` column range per
+    grid that restricts the bucketing to ``positions[lo:hi]`` — this is how the
+    image exporter zooms into a template sub-range. A grid whose range is empty
+    renders as a no-data row. When ``None`` the full grid is bucketed.
+    """
     buf = np.empty((len(grids), n_cols, 4), dtype=np.uint8)
     for ri, grid in enumerate(grids):
         grid_n = int(grid.variants_needed.shape[0])
         if grid_n == 0:
             buf[ri, :] = (NO_DATA[0], NO_DATA[1], NO_DATA[2], 255)
             continue
+        if col_bounds is None:
+            lo, hi = 0, grid_n
+        else:
+            lo, hi = col_bounds[ri]
+            lo = max(0, min(int(lo), grid_n))
+            hi = max(lo, min(int(hi), grid_n))
+        if hi <= lo:
+            buf[ri, :] = (NO_DATA[0], NO_DATA[1], NO_DATA[2], 255)
+            continue
         # Each grid may have a different number of positions (longer oligos
-        # have fewer valid start sites), so bucket each over its own length.
-        edges = np.linspace(0, grid_n, n_cols + 1).astype(np.int64)
+        # have fewer valid start sites), so bucket each over its own (in-range)
+        # length.
+        edges = (lo + np.linspace(0, hi - lo, n_cols + 1)).astype(np.int64)
         rank = _rank_array(grid, view)
         best = _segment_best(rank, edges, n_cols)
         buf[ri] = _colorize_subset(grid, best, view)

@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 from PySide6.QtCore import QRect, QSettings, Qt
 from PySide6.QtGui import (
     QColor,
@@ -105,6 +106,11 @@ class ImageExportOptions:
     include_ruler: bool = True
     include_metadata: bool = True
     light_background: bool = False
+    # Optional zoom: when ``limit_range`` is set, only template positions in
+    # ``[range_start, range_end]`` (1-based, inclusive) are rendered.
+    limit_range: bool = False
+    range_start: int | None = None
+    range_end: int | None = None
 
 
 # ── metadata / legend helpers ────────────────────────────────
@@ -197,6 +203,42 @@ def _legend_swatches(view: HeatmapView) -> tuple[str, list[tuple[int, tuple[int,
     return ("Off-target min-mismatches (green = specific):", out)
 
 
+# ── range helpers ────────────────────────────────────────────
+
+
+def _resolve_range(options: ImageExportOptions, template_len: int) -> tuple[int, int]:
+    """Return the 0-based, inclusive template position range to render.
+
+    Falls back to the whole template when the range is disabled, unset, or the
+    template is empty. Out-of-order or out-of-bounds values are clamped and
+    swapped so the caller always gets a sane ``lo <= hi`` pair.
+    """
+    if template_len <= 0:
+        return 0, 0
+    if not options.limit_range:
+        return 0, template_len - 1
+    lo = options.range_start if options.range_start is not None else 1
+    hi = options.range_end if options.range_end is not None else template_len
+    lo = max(1, min(int(lo), template_len))
+    hi = max(1, min(int(hi), template_len))
+    if hi < lo:
+        lo, hi = hi, lo
+    return lo - 1, hi - 1
+
+
+def _range_col_bounds(grids, t_lo: int, t_hi: int) -> list[tuple[int, int]]:
+    """Map a 0-based inclusive template range to a half-open column range per
+    grid, selecting the columns whose template ``positions`` fall in range.
+    ``positions`` is sorted ascending, so a binary search resolves each end."""
+    bounds: list[tuple[int, int]] = []
+    for g in grids:
+        pos = g.positions
+        lo = int(np.searchsorted(pos, t_lo, side="left"))
+        hi = int(np.searchsorted(pos, t_hi, side="right"))
+        bounds.append((lo, hi))
+    return bounds
+
+
 # ── rendering ────────────────────────────────────────────────
 
 
@@ -222,16 +264,29 @@ def render_overview_image(
 
     grids = results.grids if results else []
     n_rows = len(grids)
-    min_positions = (
-        min(int(g.positions.shape[0]) for g in grids) if grids else 0
-    )
-    n_cols = min(content_w, min_positions) if content_w > 0 else 0
+
+    # Resolve the (optional) template position range to per-grid column bounds.
+    # With no range set this spans the whole template.
+    template_len = results.template_length if results else 0
+    t_lo, t_hi = _resolve_range(options, template_len)
+    range_active = options.limit_range and (t_lo, t_hi) != (0, max(0, template_len - 1))
+    col_bounds = _range_col_bounds(grids, t_lo, t_hi) if grids else []
+    # n_cols is bounded by the narrowest in-range span among non-empty grids so
+    # per-grid bucket edges never collapse in the shortest grid; a grid with no
+    # in-range positions simply renders as a no-data row.
+    spans = [hi - lo for lo, hi in col_bounds if hi > lo]
+    min_span = min(spans) if spans else 0
+    n_cols = min(content_w, min_span) if content_w > 0 else 0
 
     meta = (
         _metadata_lines(results, view, coverage_threshold)
         if options.include_metadata
         else []
     )
+    if options.include_metadata and range_active:
+        meta.append(
+            f"Region:  positions {t_lo + 1:,}–{t_hi + 1:,} of {template_len:,} bp"
+        )
 
     # ── vertical budget ──
     y = _MARGIN
@@ -280,9 +335,14 @@ def render_overview_image(
             ty += _TITLE_H
         fname = os.path.basename(current_path) if current_path else "(unsaved)"
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        extent = (
+            f"positions {t_lo + 1:,}–{t_hi + 1:,} of {results.template_length:,} bp"
+            if range_active
+            else f"{results.template_length:,} bp"
+        )
         subtitle = (
             f"{fname}    ·    exported {stamp}    ·    "
-            f"{results.template_length:,} bp  ×  {n_rows} lengths"
+            f"{extent}  ×  {n_rows} lengths"
         )
         painter.setPen(th.muted)
         painter.setFont(QFont("Segoe UI", 10))
@@ -297,7 +357,10 @@ def render_overview_image(
         _paint_legend(painter, th, view, _MARGIN, legend_top, width - 2 * _MARGIN)
 
     # ── ruler ──
-    positions = grids[0].positions
+    # Label the in-range slice of the first (shortest-oligo) grid, matching
+    # what the heatmap above actually shows.
+    lo0, hi0 = col_bounds[0]
+    positions = grids[0].positions[lo0:hi0]
     n_positions = int(positions.shape[0])
     heatmap_bottom = heatmap_top + heatmap_h
     if options.include_ruler and n_positions > 0:
@@ -324,7 +387,7 @@ def render_overview_image(
             painter.drawLine(x, ruler_top + _RULER_H - 2, x, heatmap_bottom)
 
     # ── heatmap ──
-    buf = build_overview_buffer(grids, view, n_cols)
+    buf = build_overview_buffer(grids, view, n_cols, col_bounds)
     qimg = QImage(buf.data, n_cols, n_rows, n_cols * 4, QImage.Format.Format_RGBA8888)
     painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
     painter.drawImage(QRect(content_left, heatmap_top, content_w, heatmap_h), qimg)
@@ -499,6 +562,42 @@ class ExportImageDialog(QDialog):
         lform.addRow("Background", self._bg_combo)
         side.addWidget(layout_box)
 
+        # ── position range (optional zoom) ──
+        template_len = max(1, int(results.template_length))
+        range_box = QGroupBox("Position range")
+        rbox = QVBoxLayout(range_box)
+        rbox.setSpacing(6)
+
+        self._chk_range = QCheckBox("Limit to position range")
+        self._chk_range.setChecked(False)
+
+        rspin = QFormLayout()
+        rspin.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        self._range_start = QSpinBox()
+        self._range_start.setRange(1, template_len)
+        self._range_start.setValue(1)
+        self._range_start.setGroupSeparatorShown(True)
+        self._range_start.setEnabled(False)
+        self._range_end = QSpinBox()
+        self._range_end.setRange(1, template_len)
+        self._range_end.setValue(template_len)
+        self._range_end.setGroupSeparatorShown(True)
+        self._range_end.setEnabled(False)
+        rspin.addRow("Start", self._range_start)
+        rspin.addRow("End", self._range_end)
+
+        range_hint = QLabel(
+            f"Template positions 1–{template_len:,}. "
+            "Zoom in to a region of interest."
+        )
+        range_hint.setWordWrap(True)
+        range_hint.setStyleSheet("color: #8a8aa0; font-size: 10px;")
+
+        rbox.addWidget(self._chk_range)
+        rbox.addLayout(rspin)
+        rbox.addWidget(range_hint)
+        side.addWidget(range_box)
+
         self._dims = QLabel("")
         self._dims.setStyleSheet("color: #8a8aa0; font-size: 10px;")
         side.addWidget(self._dims)
@@ -524,6 +623,13 @@ class ExportImageDialog(QDialog):
         self._row_h.valueChanged.connect(self._refresh)
         self._bg_combo.currentIndexChanged.connect(self._refresh)
         self._chk_title.toggled.connect(self._title_edit.setEnabled)
+        self._chk_range.toggled.connect(self._range_start.setEnabled)
+        self._chk_range.toggled.connect(self._range_end.setEnabled)
+        self._chk_range.toggled.connect(self._refresh)
+        # Keep end ≥ start so the range can't invert as the user types.
+        self._range_start.valueChanged.connect(self._range_end.setMinimum)
+        self._range_start.valueChanged.connect(self._refresh)
+        self._range_end.valueChanged.connect(self._refresh)
         self._save_btn.clicked.connect(self._save)
         close_btn.clicked.connect(self.reject)
 
@@ -541,6 +647,9 @@ class ExportImageDialog(QDialog):
             include_ruler=self._chk_ruler.isChecked(),
             include_metadata=self._chk_meta.isChecked(),
             light_background=bool(self._bg_combo.currentData()),
+            limit_range=self._chk_range.isChecked(),
+            range_start=self._range_start.value(),
+            range_end=self._range_end.value(),
         )
 
     def _refresh(self) -> None:
