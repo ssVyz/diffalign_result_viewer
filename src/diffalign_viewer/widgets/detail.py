@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QPushButton,
     QSizePolicy,
     QStackedWidget,
     QTableView,
@@ -32,6 +33,7 @@ from ..models import (
     Variant,
 )
 from ..sequence import AMBIGUITY_CODES, format_sequence_display
+from .detail_text import PositionDetailTextDialog, build_detail_text
 
 VARIANT_HEADERS = ["#", "Sequence", "Count", "%", "Cumulative"]
 
@@ -335,11 +337,20 @@ class DetailPanel(QWidget):
         c_l.setContentsMargins(10, 10, 10, 10)
         c_l.setSpacing(8)
 
+        title_row = QHBoxLayout()
         self._title = QLabel()
         title_font = QFont("Segoe UI", 12, QFont.Weight.DemiBold)
         self._title.setFont(title_font)
         self._title.setStyleSheet("color: #e0e0e8;")
-        c_l.addWidget(self._title)
+        title_row.addWidget(self._title)
+        title_row.addStretch(1)
+        self._txt_button = QPushButton("Text view…")
+        self._txt_button.setToolTip(
+            "Open these position details as plain, copy-pastable text"
+        )
+        self._txt_button.clicked.connect(self._show_text_view)
+        title_row.addWidget(self._txt_button)
+        c_l.addLayout(title_row)
 
         self._stats = QLabel()
         self._stats.setStyleSheet("color: #cfcfe0; font-size: 11px;")
@@ -553,6 +564,20 @@ class DetailPanel(QWidget):
         if self._current_detail is None:
             return
         self.show_detail(self._current_detail, self._current_length)
+
+    def _show_text_view(self) -> None:
+        if self._current_detail is None:
+            return
+        text = build_detail_text(
+            self._current_detail,
+            self._current_length,
+            self._params,
+            self._template_sequence,
+            self._chk_revcomp.isChecked(),
+            self._chk_codon.isChecked(),
+        )
+        dialog = PositionDetailTextDialog(text, self)
+        dialog.exec()
 
     def reset(self) -> None:
         self._stack.setCurrentIndex(0)

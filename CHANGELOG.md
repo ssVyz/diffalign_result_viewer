@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-06-11
+
+### Added
+
+- **Text view…** button in the position-details panel (right dock): opens a
+  separate window showing the selected position's metadata, template oligo,
+  variants table and exclusivity breakdown as plain, copy-pastable monospace
+  text, with a "Copy to clipboard" button. The text honours the panel's
+  reverse-complement and codon-spacing display options. No other behaviour of
+  the panel changes.
+
 ## [0.1.3] - 2026-06-09
 
 ### Added
